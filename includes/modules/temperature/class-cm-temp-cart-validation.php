@@ -22,26 +22,22 @@ class CM_Temp_Cart_Validation {
      */
     public function validate_shipping_classes( $passed, $product_id, $quantity ) {
         
-        // 如果購物車是空的，這是第一件商品，直接允許加入。
-        if ( WC()->cart->is_empty() ) {
-            return $passed; 
-        }
+        // if ( WC()->cart->is_empty() ) {
+        //     return $passed; 
+        // }
 
-        // 1. 獲取新加入商品的溫層 (Shipping Class Slug)
-        $product_new = wc_get_product( $product_id ); 
-        $shipping_class_slug_new = $product_new->get_shipping_class(); 
+        // $product_new = wc_get_product( $product_id ); 
+        // $shipping_class_slug_new = $product_new->get_shipping_class(); 
 
-        // 2. 獲取購物車中 "控制組" (第一件商品) 的溫層
-        $cart_items = WC()->cart->get_cart();
-        $first_cart_item = reset( $cart_items );
-        $product_in_cart = wc_get_product( $first_cart_item['product_id'] );
-        $shipping_class_slug_in_cart = $product_in_cart->get_shipping_class();
+        // $cart_items = WC()->cart->get_cart();
+        // $first_cart_item = reset( $cart_items );
+        // $product_in_cart = wc_get_product( $first_cart_item['product_id'] );
+        // $shipping_class_slug_in_cart = $product_in_cart->get_shipping_class();
 
-        // 3. 比較兩者
-        if ( $shipping_class_slug_new !== $shipping_class_slug_in_cart ) {
-            wc_add_notice( __( '購物車中不能同時包含不同運送類別的商品。', 'woocommerce' ), 'error' );
-            return false; // 阻止添加
-        }
+        // if ( $shipping_class_slug_new !== $shipping_class_slug_in_cart ) {
+        //     wc_add_notice( __( '購物車中不能同時包含不同運送類別的商品。', 'woocommerce' ), 'error' );
+        //     return false;
+        // }
 
         return $passed; // 溫層相同 (或兩者都為空)，允許添加
     }

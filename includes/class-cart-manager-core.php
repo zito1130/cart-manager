@@ -10,9 +10,12 @@ final class Cart_Manager_Core {
 
     // --- 1. (改進 #1) 定義所有 Meta Keys 常數 ---
     // 這可以消除所有模組中的 "Magic Strings"，方便統一管理
-    public const META_PRODUCT_IS_PREORDER = 'preorder-product';
-    public const META_ORDER_PREORDER_STATUS = 'preorder-status';
-    public const META_ORDER_TEMP_LAYER = 'temperature-layer';
+    public const META_PRODUCT_IS_PREORDER = '_cm_preorder_product';
+    public const META_ORDER_PREORDER_STATUS = '_cm_preorder_status';
+    public const META_ORDER_TEMP_LAYER = '_cm_temperature_layer';
+    public const ROLE_SUPPLIER = 'supplier'; // 供應商角色 ID
+    public const META_PRODUCT_SUPPLIER_ID = '_cm_supplier_id'; // 儲存在「商品」上的供應商 User ID
+    public const META_ORDER_SUPPLIER_ID = '_cm_order_supplier_id'; // 儲存在「訂單」上的供應商 User ID
     // ---------------------------------------------
 
     /**
@@ -56,6 +59,14 @@ final class Cart_Manager_Core {
         include_once $module_path . 'temperature/class-cm-temp-product-admin.php';
         include_once $module_path . 'temperature/class-cm-temp-order-admin.php';
 
+        // --- 載入供應商模組 ---
+        include_once $module_path . 'supplier/class-cm-supplier-core.php';
+        include_once $module_path . 'supplier/class-cm-supplier-product-admin.php';
+        include_once $module_path . 'supplier/class-cm-supplier-permissions.php';
+        include_once $module_path . 'supplier/class-cm-supplier-cart-validation.php';
+        include_once $module_path . 'supplier/class-cm-supplier-order-meta.php';
+        include_once $module_path . 'supplier/class-cm-supplier-order-admin.php';
+
         // --- 載入共享模組 ---
         include_once $module_path . 'class-cm-cart-display.php';
 
@@ -70,6 +81,13 @@ final class Cart_Manager_Core {
         new CM_Temp_Order_Meta();
         new CM_Temp_Product_Admin();
         new CM_Temp_Order_Admin();
+
+        new CM_Supplier_Core();
+        new CM_Supplier_Product_Admin();
+        new CM_Supplier_Permissions();
+        new CM_Supplier_Cart_Validation();
+        new CM_Supplier_Order_Meta();
+        new CM_Supplier_Order_Admin();
 
         new CM_Cart_Display();
     }

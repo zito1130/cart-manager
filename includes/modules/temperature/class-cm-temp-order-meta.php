@@ -13,7 +13,6 @@ class CM_Temp_Order_Meta {
 
     public function __construct() {
         add_action( 'woocommerce_thankyou', array( $this, 'validate_and_set_meta' ), 10, 1 );
-        add_action( 'woocommerce_new_order', array( $this, 'validate_and_set_meta' ) );
     }
 
     /**
