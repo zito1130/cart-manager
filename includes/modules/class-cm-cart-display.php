@@ -6,8 +6,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * 模組：購物車共享顯示 (Shared Cart Display)
  *
- * (已重構 - JS + 隱藏資料方案)
- * (已修正) 修正 reset_supplier_tracker_mini() 中的 PHP 語法錯誤
+ * (已重構 - 多供應商結帳 方案)
+ * 職責：
+ * 1. (PHP) 排序購物車商品。
+ * 2. (PHP) 在商品名稱中 "隱藏" 供應商 ID 和 預購狀態。
+ * 3. (JS) 讀取隱藏資料，動態插入「帶有勾選框」的獨立 <tr> 標題列。
+ * 4. (JS) 處理勾選邏輯 (禁止 現貨/預購 衝突)。
+ * 5. (JS) 攔截「前往結帳」按鈕，改為發送 AJAX 儲存勾選狀態。
+ * 6. (Mini-Cart) 維持舊的 CSS 模擬方案。
  */
 class CM_Cart_Display {
 
@@ -33,6 +39,8 @@ class CM_Cart_Display {
         // 4. 重置追蹤器
         add_action( 'woocommerce_after_cart_table', array( $this, 'reset_supplier_tracker' ) );
         add_action( 'woocommerce_after_mini_cart', array( $this, 'reset_supplier_tracker_mini' ) );
+
+        add_action( 'wp_footer', array( $this, 'output_mini_cart_redirect_script' ) );
     }
 
     /**
@@ -44,20 +52,23 @@ class CM_Cart_Display {
         return $sorted_cart;
     }
     public function sort_by_supplier_callback( $a, $b ) {
-        $supplier_a = $this->get_item_supplier_id( $a );
-        $supplier_b = $this->get_item_supplier_id( $b );
+        $supplier_a = self::get_item_supplier_id( $a ); // (改為 self::)
+        $supplier_b = self::get_item_supplier_id( $b ); // (改為 self::)
         return $supplier_a <=> $supplier_b;
     }
 
     
     /**
-     * 2. (JS) 輸出 JavaScript 腳本 (不變)
+     * 2. (JS) 輸出 JavaScript 腳本 (*** 已更新：驗證邏輯切換為「溫層」 ***)
      */
     public function output_cart_grouping_script() {
         // 只在主購物車頁面執行
         if ( ! is_cart() ) {
             return;
         }
+        
+        $nonce = wp_create_nonce( 'cm-cart-nonce' );
+        
         ?>
         <script type="text/javascript">
             jQuery(document).ready(function($) {
@@ -69,39 +80,235 @@ class CM_Cart_Display {
                 }
 
                 var colCount = $cartTable.find('thead tr:first th').length;
-                if ( colCount === 0 ) colCount = 6; // 備用
+                if ( colCount === 0 ) colCount = 6; 
 
                 var currentSupplierId = null;
 
-                // 迴圈遍歷表格中「所有」商品列
+                // --- 步驟 1：建立標題列 和 標記商品列 ---
                 $cartTable.find('tbody tr.cart_item').each(function() {
                     var $productRow = $(this);
                     
-                    // 尋找我們在 PHP 中 "隱藏" 的 <span>
                     var $supplierData = $productRow.find('span.cm-supplier-data').first();
-                    if ( ! $supplierData.length ) {
-                        return;
-                    }
+                    if ( ! $supplierData.length ) return;
 
                     var supplierId = $supplierData.data('supplier-id');
+                    var supplierName = $supplierData.data('supplier-name');
                     
-                    // 檢查 ID 是否變更
+                    // (*** 關鍵修改：從 pre-order 切換到 temp-slug ***)
+                    var tempSlug = $supplierData.data('temp-slug'); 
+                    
+                    // 我們仍然需要 preorder-status，以便「全選」邏輯可以區分它們
+                    var preorderStatus = $supplierData.data('preorder-status');
+                    
+                    $productRow.attr('data-supplier-id', supplierId)
+                               .attr('data-temp-slug', tempSlug) // (*** 關鍵修改 ***)
+                               .attr('data-preorder-status', preorderStatus); // (保留)
+
                     if ( supplierId !== currentSupplierId ) {
-                        currentSupplierId = supplierId; // 更新追蹤器
-                        var supplierName = $supplierData.data('supplier-name');
+                        currentSupplierId = supplierId; 
                         
-                        // 建立一個全新的、獨立的 <tr> 標題列
+                        var checkboxStyle = "width: 18px; height: 18px; margin-right: 15px; flex-shrink: 0;";
+                        var cellStyle = "padding-top: 25px; border: none; display: flex; align-items: center;";
+                        
+                        var cellHTML = '<td colspan="' + colCount + '" style="' + cellStyle + '">' +
+                                           '<input type="checkbox" class="cm-supplier-checkbox" ' +
+                                           'style="' + checkboxStyle + '" ' +
+                                           'data-supplier-id="' + supplierId + '" ' +
+                                           'data-preorder-status="' + preorderStatus + '" ' + // (保留)
+                                           'data-temp-slug="' + tempSlug + '">' + // (*** 關鍵修改 ***)
+                                           '<h3 style="margin: 0; font-size: 1.2em;">' + supplierName + '</h3>' +
+                                       '</td>';
+
                         var $headerRow = $(
                             '<tr class="cm-supplier-header-row">' +
-                                '<td colspan="' + colCount + '" style="padding-top: 25px; border: none;">' +
-                                    '<h3 style="margin: 0;">' + supplierName + '</h3>' +
-                                '</td>' +
+                                cellHTML +
                             '</tr>'
                         );
                         
-                        // 將標題列插入到商品列的「上方」
                         $productRow.before($headerRow);
                     }
+                });
+                
+                // --- 步驟 1.5：插入「全選」勾選框 (不變) ---
+                var $firstHeader = $cartTable.find('tr.cm-supplier-header-row').first();
+                if ($firstHeader.length) {
+                    var selectAllHTML = '<tr class="cm-select-all-row">' +
+                        '<td colspan="' + colCount + '" style="padding: 10px 0 10px 16px; border-top: 1px solid #e0e0e0;">' +
+                            '<label style="display: flex; align-items: center; margin-bottom: 0; font-weight: bold; font-size: 1.1em;">' +
+                                '<input type="checkbox" id="cm-select-all-suppliers" style="width: 18px; height: 18px; margin-right: 15px;">' +
+                                '<?php esc_html_e( '全選供應商', 'cart-manager' ); ?>' +
+                            '</label>' +
+                        '</td>' +
+                    '</tr>';
+                    $firstHeader.before(selectAllHTML);
+                }
+
+
+                // --- 步驟 2：處理「個別勾選框」衝突邏輯 (*** 關鍵修改：檢查溫層 ***) ---
+                $cartTable.on('change', 'input.cm-supplier-checkbox', function() {
+                    var $clickedBox = $(this);
+                    
+                    // (*** 關鍵修改：檢查 data-temp-slug ***)
+                    var clickedTemp = $clickedBox.data('temp-slug');
+                    var selectedTemp = null;
+                    
+                    // 找出其他 *已勾選* 的項目
+                    $('input.cm-supplier-checkbox:checked').not($clickedBox).each(function() {
+                        selectedTemp = $(this).data('temp-slug');
+                        return false; 
+                    });
+                    
+                    // 如果點擊的溫層與已選的溫層不同
+                    if ( $clickedBox.prop('checked') && selectedTemp !== null && selectedTemp !== clickedTemp ) {
+                        // (*** 關鍵修改：更新提示文字 ***)
+                        alert('<?php esc_html_e( '您不能同時結帳「不同溫層」的商品。\n請分開結帳。', 'cart-manager' ); ?>');
+                        $clickedBox.prop('checked', false);
+                    }
+                    
+                    // 更新「全選」勾選框的狀態 (不變)
+                    updateSelectAllCheckboxState();
+                });
+
+                // --- 步驟 3：處理「全選」勾選框的點擊邏輯 (*** 關鍵修改：依預購/現貨全選 ***) ---
+                // (注意：全選邏輯 *不* 應該檢查溫層，而是檢查「預購/現貨」，因為這才是分開結帳的主因)
+                $cartTable.on('change', '#cm-select-all-suppliers', function() {
+                    var $selectAll = $(this);
+                    var $supplierBoxes = $('input.cm-supplier-checkbox');
+                    var isChecked = $selectAll.prop('checked');
+                    
+                    if (isChecked) {
+                        // (*** 保持不變：全選邏輯 *依然* 跟隨 預購/現貨 ***)
+                        var firstStatus = $supplierBoxes.first().data('preorder-status');
+                        var hasConflict = false;
+                        
+                        $supplierBoxes.each(function() {
+                            if ($(this).data('preorder-status') === firstStatus) {
+                                $(this).prop('checked', true);
+                            } else {
+                                $(this).prop('checked', false); 
+                                hasConflict = true;
+                            }
+                        });
+                        
+                        if (hasConflict) {
+                            var statusText = (firstStatus === 'yes') ? '<?php esc_html_e( '預購', 'cart-manager' ); ?>' : '<?php esc_html_e( '現貨', 'cart-manager' ); ?>';
+                            alert('<?php esc_html_e( '已全選所有', 'cart-manager' ); ?>「' + statusText + '」<?php esc_html_e( '的供應商。\n不同狀態的商品已被略過。', 'cart-manager' ); ?>');
+                        }
+                    } else {
+                        $supplierBoxes.prop('checked', false);
+                    }
+                    
+                    // (*** 全新 ***) 全選後，手動觸發一次溫層檢查
+                    // 檢查第一個被勾選的框，並取消勾選所有與其溫層衝突的框
+                    var $checkedBoxes = $supplierBoxes.filter(':checked');
+                    if ($checkedBoxes.length > 0) {
+                        var firstCheckedTemp = $checkedBoxes.first().data('temp-slug');
+                        var tempConflict = false;
+                        
+                        $checkedBoxes.not(':first').each(function() {
+                            if ($(this).data('temp-slug') !== firstCheckedTemp) {
+                                $(this).prop('checked', false);
+                                tempConflict = true;
+                            }
+                        });
+                        
+                        if (tempConflict) {
+                             alert('<?php esc_html_e( '「全選」操作發現溫層衝突，已自動取消勾選不同溫層的商品。', 'cart-manager' ); ?>');
+                        }
+                    }
+                    
+                    // (*** 全新 ***) 再次更新全選框狀態
+                    updateSelectAllCheckboxState();
+                });
+
+                // --- 步驟 4：更新「全選」狀態的輔助函數 (*** 關鍵修改：依預購/現貨 ***) ---
+                // (全選框的狀態 *依然* 跟隨 預購/現貨)
+                function updateSelectAllCheckboxState() {
+                    var $selectAll = $('#cm-select-all-suppliers');
+                    if (!$selectAll.length) return;
+                    
+                    var $supplierBoxes = $('input.cm-supplier-checkbox');
+                    var $checkedBoxes = $supplierBoxes.filter(':checked');
+                    
+                    if ($checkedBoxes.length === 0) {
+                        $selectAll.prop('checked', false).prop('indeterminate', false);
+                    } else {
+                        // (*** 保持不變：檢查 data-preorder-status ***)
+                        var firstStatus = $checkedBoxes.first().data('preorder-status');
+                        
+                        var $eligibleBoxes = $supplierBoxes.filter(function() {
+                            return $(this).data('preorder-status') === firstStatus;
+                        });
+                        
+                        if ($checkedBoxes.length === $eligibleBoxes.length) {
+                            $selectAll.prop('checked', true).prop('indeterminate', false);
+                        } else {
+                            $selectAll.prop('checked', false).prop('indeterminate', true);
+                        }
+                    }
+                }
+
+
+                // --- 步驟 5：攔截「前往結帳」按鈕 (*** 關鍵修改：檢查溫層 ***) ---
+                $(document).on('click', 'a.checkout-button', function(e) {
+                    e.preventDefault(); 
+                    var $checkoutButton = $(this);
+                    var checkoutUrl = $checkoutButton.attr('href');
+                    var $checkedBoxes = $('input.cm-supplier-checkbox:checked');
+                    
+                    if ( $checkedBoxes.length === 0 ) {
+                        alert('<?php esc_html_e( '請至少勾選一個您要結帳的供應商。', 'cart-manager' ); ?>');
+                        return;
+                    }
+
+                    // (*** 關鍵修改：現在我們檢查 溫層 (temp-slug) 是否衝突 ***)
+                    var selectedTemp = null;
+                    var hasTempConflict = false;
+                    $checkedBoxes.each(function() {
+                        var currentTemp = $(this).data('temp-slug');
+                        if ( selectedTemp === null ) {
+                            selectedTemp = currentTemp;
+                        } else if ( selectedTemp !== currentTemp ) {
+                            hasTempConflict = true;
+                        }
+                    });
+                    
+                    if ( hasTempConflict ) {
+                         // (*** 關鍵修改：更新提示文字 ***)
+                         alert('<?php esc_html_e( '您不能同時結帳「不同溫層」的商品。\n請分開結帳。', 'cart-manager' ); ?>');
+                         return;
+                    }
+                    
+                    // (註：我們不再檢查 預購/現貨 衝突，因為您希望允許它們一起結帳)
+
+                    var selectedIds = $checkedBoxes.map(function() {
+                        return $(this).data('supplier-id');
+                    }).get(); 
+
+                    $checkoutButton.addClass('disabled').text('<?php esc_html_e( '處理中，請稍候...', 'cart-manager' ); ?>');
+
+                    // AJAX 請求 (不變)
+                    $.ajax({
+                        url: '<?php echo esc_url( admin_url('admin-ajax.php') ); ?>',
+                        type: 'POST',
+                        data: {
+                            action: 'cm_set_checkout_suppliers',
+                            security: '<?php echo esc_js( $nonce ); ?>',
+                            selected_suppliers: selectedIds
+                        },
+                        success: function(response) {
+                            if ( response.success ) {
+                                window.location.href = checkoutUrl;
+                            } else {
+                                alert('<?php esc_html_e( '儲存勾選時發生錯誤: ', 'cart-manager' ); ?>' + (response.data || '<?php esc_html_e( '未知錯誤', 'cart-manager' ); ?>'));
+                                $checkoutButton.removeClass('disabled').text('<?php esc_html_e( '前往結帳', 'cart-manager' ); ?>');
+                            }
+                        },
+                        error: function() {
+                            alert('<?php esc_html_e( '網路請求失敗，請重試。', 'cart-manager' ); ?>');
+                            $checkoutButton.removeClass('disabled').text('<?php esc_html_e( '前往結帳', 'cart-manager' ); ?>');
+                        }
+                    });
                 });
             });
         </script>
@@ -110,15 +317,39 @@ class CM_Cart_Display {
 
 
     /**
-     * 3. (Mini-Cart + Meta + 隱藏資料) (不變)
+     * 3. (*** 關鍵修正：解決 Undefined variable 錯誤 ***) 
+     * (Mini-Cart + Meta + 隱藏資料)
+     * a) 顯示 Mini-Cart 標題 (CSS 模擬)
+     * b) 顯示 商品 Meta (現貨/常溫)
+     * c) 隱藏資料 (包含溫層 slug) 供 JS 讀取
      */
     public function display_minicart_header_and_meta( $name, $cart_item, $cart_item_key ) {
         
         $heading = ''; 
         $hidden_data = '';
 
-        $item_supplier_id = $this->get_item_supplier_id( $cart_item );
-        $supplier_name = $this->get_supplier_display_name( $item_supplier_id );
+        $item_supplier_id = self::get_item_supplier_id( $cart_item );
+        $supplier_name = self::get_supplier_display_name( $item_supplier_id );
+
+        // --- (C.1) 獲取 Meta ---
+        $id_to_check = !empty( $cart_item['variation_id'] ) ? $cart_item['variation_id'] : $cart_item['product_id'];
+        
+        // (*** 修正 #1：加入 fallback 邏輯，防止 $product 為 null ***)
+        $product = $cart_item['data'];
+        if ( ! $product ) {
+            $product = wc_get_product( $id_to_check );
+        }
+        // 如果 $product 仍然不存在 (例如商品已被刪除)，提早退出
+        if ( ! $product ) {
+            return $name;
+        }
+        
+        // 獲取預購狀態
+        $preorder_product = get_post_meta( $id_to_check, Cart_Manager_Core::META_PRODUCT_IS_PREORDER, true );
+        $preorder_status_string = ($preorder_product === 'yes') ? 'yes' : 'no';
+
+        // (*** 修正 #2：在這裡 (sprintf 之前) 定義 $shipping_class_slug ***)
+        $shipping_class_slug = $product->get_shipping_class();
 
         // --- (A) Mini-Cart 標題邏輯 (不變) ---
         if ( ! is_cart() ) {
@@ -133,28 +364,26 @@ class CM_Cart_Display {
             }
         }
 
-        // --- (B) 隱藏資料 (不變) ---
+        // --- (B) 隱藏資料 (使用我們在 C.1 中定義的變數) ---
         $hidden_data = sprintf(
-            '<span class="cm-supplier-data" data-supplier-id="%s" data-supplier-name="%s" style="display:none;"></span>',
+            '<span class="cm-supplier-data" data-supplier-id="%s" data-supplier-name="%s" data-preorder-status="%s" data-temp-slug="%s" style="display:none;"></span>',
             esc_attr( $item_supplier_id ),
-            esc_attr( $supplier_name )
+            esc_attr( $supplier_name ),
+            esc_attr( $preorder_status_string ),
+            esc_attr( $shipping_class_slug ) // (現在 $shipping_class_slug 肯定已定義)
         );
 
 
-        // --- (C) 商品 Meta 邏輯 (不變) ---
-        $id_to_check = !empty( $cart_item['variation_id'] ) ? $cart_item['variation_id'] : $cart_item['product_id'];
+        // --- (C.2) 商品 Meta 顯示邏輯 (*** 修正 #3：移除多餘的定義 ***) ---
         $meta_html = '';
-
-        $preorder_product = get_post_meta( $id_to_check, Cart_Manager_Core::META_PRODUCT_IS_PREORDER, true ); 
+ 
         if ( $preorder_product === 'yes' ) {
             $meta_html .= '<br><small>' . __( '預購', 'woocommerce' ) . '</small>';
         } else {
             $meta_html .= '<br><small>' . __( '現貨', 'woocommerce' ) . '</small>';
         }
 
-        $product = $cart_item['data'];
-        $shipping_class_slug = $product->get_shipping_class(); 
-
+        // (*** 修正 ***) $shipping_class_slug 已經在上面定義過了，我們直接使用即可
         if ( $shipping_class_slug ) {
             $shipping_class = get_term_by( 'slug', $shipping_class_slug, 'product_shipping_class' );
             if ( $shipping_class && ! is_wp_error( $shipping_class ) ) {
@@ -172,24 +401,16 @@ class CM_Cart_Display {
     public function reset_supplier_tracker() {
         $this->current_supplier_id = null;
     }
-    
-    /**
-     * (*** 關鍵修正 ***)
-     * 修正語法錯誤
-     */
     public function reset_supplier_tracker_mini() {
-        // (修正：從 $this. 改為 $this->)
         $this->current_supplier_id_mini = null;
     }
 
     /**
-     * 5. 輔助函數 (修正)
+     * 5. 輔助函數 (*** 修改 ***)
+     * (改為 public static 讓 CM_Checkout_Manager 可以呼叫)
      */
-    private function get_item_supplier_id( $cart_item ) {
+    public static function get_item_supplier_id( $cart_item ) {
         
-        // (*** 修正 ***) 
-        // 確保 $cart_item['data'] 是存在的，如果不存在 (例如在排序鉤子中)，
-        // 就手動獲取商品物件。
         $product = null;
         if ( ! empty( $cart_item['data'] ) ) {
             $product = $cart_item['data'];
@@ -207,11 +428,17 @@ class CM_Cart_Display {
         $parent_id = $product->is_type('variation') ? $product->get_parent_id() : $product->get_id();
         $supplier_id = get_post_meta( $parent_id, Cart_Manager_Core::META_PRODUCT_SUPPLIER_ID, true );
         
-        return $supplier_id ? $supplier_id : '';
+        // (*** 全新 ***) 確保站方商品的 ID 是一個 '0' 或 'stand' 之類的字串，而不是空字串
+        return $supplier_id ? $supplier_id : 'stand'; // 'stand' 代表站方
     }
 
-    private function get_supplier_display_name( $supplier_id ) {
-        if ( empty( $supplier_id ) ) {
+    /**
+     * 輔助函數 (*** 修改 ***)
+     * (改為 public static)
+     */
+    public static function get_supplier_display_name( $supplier_id ) {
+        // (*** 修改 ***) 配合上面的 'stand'
+        if ( empty( $supplier_id ) || $supplier_id === 'stand' ) {
             return __( '站方商品', 'cart-manager' );
         }
 
@@ -221,5 +448,42 @@ class CM_Cart_Display {
         }
 
         return __( '未知供應商', 'cart-manager' );
+    }
+
+    /**
+     * (*** 全新 ***)
+     * 5. (JS) 輸出 Mini-Cart 重新導向腳本
+     *
+     * 攔截 mini-cart 的結帳按鈕，強制導向到主購物車頁面。
+     */
+    public function output_mini_cart_redirect_script() {
+        
+        // 這個腳本不需要在購物車或結帳頁面執行
+        if ( is_cart() || is_checkout() ) {
+            return;
+        }
+        
+        // 獲取主購物車頁面的 URL
+        $cart_url = wc_get_cart_url();
+        if ( ! $cart_url ) {
+            return;
+        }
+        ?>
+        <script type="text/javascript">
+            jQuery(document).ready(function($) {
+                
+                // 我們使用 'body' 進行事件委派 (event delegation)，
+                // 這樣才能捕捉到由 AJAX 動態載入的 mini-cart 內容
+                $('body').on('click', '.widget_shopping_cart_content .checkout.wc-forward', function(e) {
+                    
+                    // 1. 阻止按鈕的預設行為 (前往結帳)
+                    e.preventDefault();
+                    
+                    // 2. 強制將用戶導向到主購物車頁面
+                    window.location.href = '<?php echo esc_url( $cart_url ); ?>';
+                });
+            });
+        </script>
+        <?php
     }
 }

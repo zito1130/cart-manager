@@ -17,7 +17,7 @@ class CM_Temp_Order_Admin {
         add_filter( 'woocommerce_order_query_args', array( $this, 'filter_orders_by_temperature_layer' ) );
         add_filter( 'bulk_actions-woocommerce_page_wc-orders', array( $this, 'add_bulk_actions_check_temperature' ), 20, 1 );
         add_filter( 'handle_bulk_actions-woocommerce_page_wc-orders', array( $this, 'handle_bulk_action_check_temperature' ), 10, 3 );
-        add_action( 'admin_footer', array( $this, 'order_selection_script' ) );
+        // add_action( 'admin_footer', array( $this, 'order_selection_script' ) );
     }
 
     /**
@@ -58,19 +58,29 @@ class CM_Temp_Order_Admin {
     }
 
     /**
-     * 3. 添加溫層篩選器
+     * 3. 添加溫層篩選器 (*** 已修正：加入 selected 狀態 ***)
      */
     public function add_temperature_layer_filter() {
-        // ... (邏輯不變) ...
+        // 獲取所有運送類別 (邏輯不變)
         $shipping_classes = get_terms( array(
             'taxonomy' => 'product_shipping_class',
             'hide_empty' => false,
         ) );
 
+        // --- (*** 關鍵修正 ***) ---
+        // 1. 獲取當前 URL 中的篩選值
+        $current_value = isset( $_GET['temperature_layer_filter'] ) ? sanitize_text_field( $_GET['temperature_layer_filter'] ) : '';
+        // -------------------------
+
         echo '<select id="temperature_layer_filter" name="temperature_layer_filter">';
-        echo '<option value="">' . __( '所有溫層', 'woocommerce' ) . '</option>';
+        
+        // 2. 檢查 "所有溫層" 是否被選中
+        //    我們使用 WordPress 內建的 selected() 函數來自動輸出 ' selected="selected"'
+        echo '<option value=""' . selected( $current_value, '', false ) . '>' . __( '所有溫層', 'woocommerce' ) . '</option>';
+        
         foreach ( $shipping_classes as $class ) {
-            echo '<option value="' . esc_attr( $class->slug ) . '">' . esc_html( $class->name ) . '</option>';
+            // 3. 檢查 $class->slug 是否為當前選中的值
+            echo '<option value="' . esc_attr( $class->slug ) . '"' . selected( $current_value, $class->slug, false ) . '>' . esc_html( $class->name ) . '</option>';
         }
         echo '</select>';
     }

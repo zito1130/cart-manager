@@ -26,10 +26,8 @@ class CM_Supplier_Product_Admin {
         add_action( 'manage_product_posts_custom_column', array( $this, 'show_supplier_column_for_products' ), 10, 2 );
         add_action( 'admin_head', array( $this, 'set_supplier_column_width' ) );
         
-        // --- (已移除) ---
-        // 移除 "變化類型" 的相關鉤子
-        // remove_action( 'woocommerce_variation_options', array( $this, 'add_supplier_dropdown_variable' ), 10, 3 );
-        // remove_action( 'woocommerce_save_product_variation', array( $this, 'save_supplier_meta_variable' ), 10, 2 );
+        add_action( 'woocommerce_product_bulk_edit_start', array( $this, 'add_supplier_bulk_edit_field' ) );
+        add_action( 'woocommerce_product_bulk_edit_save', array( $this, 'save_supplier_bulk_edit_field' ) );
     }
 
     /**
@@ -148,6 +146,58 @@ class CM_Supplier_Product_Admin {
             echo '<style>
                 .column-supplier { width: 80px; } /* 設置欄位寬度 */
             </style>';
+        }
+    }
+
+    /**
+     * (全新) 將「供應商」欄位添加到「批次編輯」視窗
+     */
+    public function add_supplier_bulk_edit_field() {
+        // 呼叫您已有的私有函數來獲取列表
+        $suppliers = $this->get_supplier_options_list(); 
+        ?>
+        <div class="inline-edit-group">
+            <label class="alignleft">
+                <span class="title"><?php esc_html_e( '供應商', 'cart-manager' ); ?></span>
+                <span class="input-text-wrap">
+                    <select class="supplier_id" name="_cm_supplier_id">
+                        <option value="-1"><?php esc_html_e( '— 不變更 —', 'woocommerce' ); ?></option>
+                        <?php
+                        // 迴圈 $suppliers 陣列來建立 <option>
+                        if ( ! empty( $suppliers ) ) {
+                            foreach ( $suppliers as $supplier_id => $supplier_name ) {
+                                // 'get_supplier_options_list' 已包含 '站方商品' (value='')
+                                echo '<option value="' . esc_attr( $supplier_id ) . '">' . esc_html( $supplier_name ) . '</option>';
+                            }
+                        }
+                        ?>
+                    </select>
+                </span>
+            </label>
+        </div>
+        <?php
+    }
+
+    /**
+     * (全新) 儲存「批次編輯」中的「供應商」
+     *
+     * @param WC_Product $product 正在被儲存的商品物件
+     */
+    public function save_supplier_bulk_edit_field( $product ) {
+        
+        // 檢查從「批次編輯」框傳來的值
+        if ( isset( $_REQUEST[ Cart_Manager_Core::META_PRODUCT_SUPPLIER_ID ] ) ) {
+            $new_supplier_id = wc_clean( $_REQUEST[ Cart_Manager_Core::META_PRODUCT_SUPPLIER_ID ] );
+            
+            // 如果值是 "-1" (— 不變更 —)，則不做任何事
+            if ( $new_supplier_id !== '-1' ) {
+                $product->update_meta_data( Cart_Manager_Core::META_PRODUCT_SUPPLIER_ID, $new_supplier_id );
+                
+                // --- (*** 關鍵修正 ***) ---
+                // 強制儲存變更
+                $product->save();
+                // -------------------------
+            }
         }
     }
 }

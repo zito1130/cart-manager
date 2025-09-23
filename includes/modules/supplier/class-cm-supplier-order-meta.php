@@ -11,7 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 class CM_Supplier_Order_Meta {
 
     public function __construct() {
-        add_action( 'woocommerce_thankyou', array( $this, 'save_supplier_id_to_order' ), 10, 1 );
+        // add_action( 'woocommerce_thankyou', array( $this, 'save_supplier_id_to_order' ), 10, 1 );
     }
 
     /**

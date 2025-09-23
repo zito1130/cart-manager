@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 class CM_Preorder_Order_Meta {
 
     public function __construct() {
-        add_action( 'woocommerce_thankyou', array( $this, 'set_preorder_status_meta' ), 10, 1 );
+        // add_action( 'woocommerce_thankyou', array( $this, 'set_preorder_status_meta' ), 10, 1 );
     }
 
     /**

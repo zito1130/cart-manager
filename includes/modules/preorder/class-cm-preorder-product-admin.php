@@ -19,6 +19,9 @@ class CM_Preorder_Product_Admin {
 
         add_action( 'woocommerce_variation_options', array( $this, 'add_preorder_checkbox_variable' ), 10, 3 );
         add_action( 'woocommerce_save_product_variation', array( $this, 'save_preorder_checkbox_variable' ), 10, 2 );
+
+        add_action( 'woocommerce_product_bulk_edit_start', array( $this, 'add_preorder_bulk_edit_field' ) );
+        add_action( 'woocommerce_product_bulk_edit_save', array( $this, 'save_preorder_bulk_edit_field' ) );
     }
 
     /**
@@ -110,5 +113,51 @@ class CM_Preorder_Product_Admin {
         echo '<style>
             .column-preorder { width: 60px; }
         </style>';
+    }
+
+    /**
+     * (全新) 將「預購狀態」欄位添加到「批次編輯」視窗
+     */
+    public function add_preorder_bulk_edit_field() {
+        ?>
+        <div class="inline-edit-group">
+            <label class="alignleft">
+                <span class="title"><?php esc_html_e( '預購狀態', 'cart-manager' ); ?></span>
+                <span class="input-text-wrap">
+                    <select class="preorder_status" name="_cm_preorder_product">
+                        <option value="-1"><?php esc_html_e( '— 不變更 —', 'woocommerce' ); ?></option>
+                        <option value="yes"><?php esc_html_e( '是 (預購)', 'cart-manager' ); ?></option>
+                        <option value="no"><?php esc_html_e( '否 (現貨)', 'cart-manager' ); ?></option>
+                    </select>
+                </span>
+            </label>
+        </div>
+        <?php
+    }
+
+    /**
+     * (全新) 儲存「批次編輯」中的「預購狀態」
+     *
+     * @param WC_Product $product 正在被儲存的商品物件
+     */
+    public function save_preorder_bulk_edit_field( $product ) {
+        
+        // 檢查從「批次編輯」框傳來的值
+        if ( isset( $_REQUEST[ Cart_Manager_Core::META_PRODUCT_IS_PREORDER ] ) ) {
+            $new_status = wc_clean( $_REQUEST[ Cart_Manager_Core::META_PRODUCT_IS_PREORDER ] );
+            
+            // 如果值是 "-1" (— 不變更 —)，則不做任何事
+            if ( $new_status !== '-1' ) {
+                
+                if ( $product && ! $product->is_type('variable') ) {
+                    $product->update_meta_data( Cart_Manager_Core::META_PRODUCT_IS_PREORDER, $new_status );
+                    
+                    // --- (*** 關鍵修正 ***) ---
+                    // 強制儲存變更
+                    $product->save();
+                    // -------------------------
+                }
+            }
+        }
     }
 }

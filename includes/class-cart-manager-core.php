@@ -69,6 +69,7 @@ final class Cart_Manager_Core {
 
         // --- 載入共享模組 ---
         include_once $module_path . 'class-cm-cart-display.php';
+        include_once $module_path . 'class-cm-checkout-manager.php';
 
 
         // --- 初始化所有模組類別 (這將觸發它們各自的 __construct 掛鉤) ---
@@ -89,6 +90,7 @@ final class Cart_Manager_Core {
         new CM_Supplier_Order_Meta();
         new CM_Supplier_Order_Admin();
 
+        new CM_Checkout_Manager();
         new CM_Cart_Display();
     }
 }
