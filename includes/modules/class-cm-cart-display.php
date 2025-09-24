@@ -486,4 +486,36 @@ class CM_Cart_Display {
         </script>
         <?php
     }
+
+    /**
+     * (全新) 輔助函數：獲取依供應商分組的重量
+     * @return array [ 'supplier_id' => 'weight', 'supplier_id_b' => 'weight_b' ]
+     */
+    public static function get_cart_weight_by_supplier() {
+        $cart_items = WC()->cart->get_cart();
+        $supplier_weights = array();
+
+        if ( empty( $cart_items ) ) {
+            return $supplier_weights;
+        }
+
+        foreach ( $cart_items as $cart_item_key => $cart_item ) {
+            // 呼叫本類別中的靜態函數
+            $supplier_id = self::get_item_supplier_id( $cart_item );
+            
+            // 確保 $cart_item['data'] 是一個 WC_Product 物件
+            if ( ! is_object( $cart_item['data'] ) || ! method_exists( $cart_item['data'], 'get_weight' ) ) {
+                continue;
+            }
+
+            $product_weight = (float) $cart_item['data']->get_weight();
+            $quantity = (int) $cart_item['quantity'];
+            
+            if ( ! isset( $supplier_weights[ $supplier_id ] ) ) {
+                $supplier_weights[ $supplier_id ] = 0;
+            }
+            $supplier_weights[ $supplier_id ] += ( $product_weight * $quantity );
+        }
+        return $supplier_weights;
+    }
 }
