@@ -488,7 +488,8 @@ class CM_Cart_Display {
     }
 
     /**
-     * (全新) 輔助函數：獲取依供應商分組的重量
+     * (*** 已強化：強制轉換重量為浮點數，防止 null ***)
+     * 輔助函數：獲取依供應商分組的重量
      * @return array [ 'supplier_id' => 'weight', 'supplier_id_b' => 'weight_b' ]
      */
     public static function get_cart_weight_by_supplier() {
@@ -500,15 +501,17 @@ class CM_Cart_Display {
         }
 
         foreach ( $cart_items as $cart_item_key => $cart_item ) {
-            // 呼叫本類別中的靜態函數
             $supplier_id = self::get_item_supplier_id( $cart_item );
             
-            // 確保 $cart_item['data'] 是一個 WC_Product 物件
             if ( ! is_object( $cart_item['data'] ) || ! method_exists( $cart_item['data'], 'get_weight' ) ) {
                 continue;
             }
 
+            // --- (*** 關鍵修正 ***) ---
+            // 使用 (float) 將 get_weight() 的回傳值 (可能是 null 或 '') 強制轉為 0.0
             $product_weight = (float) $cart_item['data']->get_weight();
+            // --- (*** 修正完畢 ***) ---
+
             $quantity = (int) $cart_item['quantity'];
             
             if ( ! isset( $supplier_weights[ $supplier_id ] ) ) {

@@ -28,8 +28,8 @@ class CM_Checkout_Manager {
         add_action( 'woocommerce_order_status_on-hold', array( $this, 'split_order_by_supplier' ), 10, 1 );
 
         add_action( 'woocommerce_thankyou', array( $this, 'restore_removed_cart_items' ), 100, 1 );
-        add_action( 'woocommerce_thankyou', array( $this, 'conditionally_remove_default_order_details' ), 5, 1 );
-        add_action( 'woocommerce_thankyou', array( $this, 'display_split_orders_table_on_thankyou' ), 20, 1 );
+        // (*** 已重構 ***) 感謝頁面：使用單一函數處理所有邏輯
+        add_action( 'woocommerce_thankyou', array( $this, 'display_thankyou_page_details' ), 5, 1 );
     }
 
     /**
@@ -168,6 +168,19 @@ class CM_Checkout_Manager {
                 $child_order->set_payment_method_title( $parent_order->get_payment_method_title() );
                 $child_order->set_transaction_id( $parent_order->get_transaction_id() );
 
+                $cvs_meta_keys = [
+                    '_shipping_cvs_store_ID',
+                    '_shipping_cvs_store_name',
+                    '_shipping_cvs_store_address',
+                    '_shipping_cvs_store_telephone'
+                ];
+                foreach ($cvs_meta_keys as $meta_key) {
+                    // 使用 $parent_order 來獲取 meta
+                    $meta_value = $parent_order->get_meta($meta_key, true);
+                    if ($meta_value) {
+                        $child_order->update_meta_data($meta_key, $meta_value);
+                    }
+                }
                 // B.2 (*** 關鍵修正 ***) 
                 // 複製父訂單的「運送方式」，並「複製」原始運費
                 foreach ( $parent_order->get_items( 'shipping' ) as $shipping_item_id => $shipping_item ) {
@@ -298,112 +311,6 @@ class CM_Checkout_Manager {
     }
 
     /**
-     * (全新) 5. 感謝頁面 (A)：有條件地移除預設訂單詳情
-     *
-     * 此函數以高優先級 (5) 執行，在 WooCommerce (10) 顯示詳情之前。
-     * 如果這是一張父訂單，它會移除預設的顯示動作，以便我們後續(20)可以插入自訂表格。
-     *
-     * @param int $order_id 傳入的父訂單 ID
-     */
-    public function conditionally_remove_default_order_details( $order_id ) {
-        $parent_order = wc_get_order( $order_id );
-        
-        // 檢查這是否為一個我們拆分過的父訂單
-        if ( $parent_order && $parent_order->get_meta( '_cm_order_split_parent' ) && $parent_order->get_parent_id() === 0 ) {
-            // 移除 WooCommerce 預設的 'woocommerce_order_details_table' 動作
-            remove_action( 'woocommerce_thankyou', 'woocommerce_order_details_table', 10 );
-        }
-    }
-
-    /**
-     * (全新) 6. 感謝頁面 (B)：顯示所有拆分訂單的摘要表格
-     *
-     * 此函數在 (20) 執行，顯示一個類似「我的帳號」頁面的表格，
-     * 列出父訂單以及所有子訂單。
-     *
-     * @param int $order_id 傳入的父訂單 ID
-     */
-    public function display_split_orders_table_on_thankyou( $order_id ) {
-        
-        $parent_order = wc_get_order( $order_id );
-
-        // 1. 再次檢查這是否為父訂單
-        if ( ! $parent_order || ! $parent_order->get_meta( '_cm_order_split_parent' ) || $parent_order->get_parent_id() > 0 ) {
-            // 如果 'conditionally_remove_default_order_details' 移除了預設表格，
-            // 但這裡檢查失敗，我們需要手動把預設表格加回去，以防萬一
-            if ( ! did_action('woocommerce_thankyou_order_details_table') ) {
-                 wc_get_template( 'order/order-details.php', array( 'order_id' => $order_id ) );
-            }
-            return;
-        }
-
-        // 2. 獲取所有子訂單
-        $child_orders = wc_get_orders( array(
-            'parent'  => $order_id,
-            'limit'   => -1,
-            'orderby' => 'ID',
-            'order'   => 'ASC'
-        ) );
-
-        // 3. 建立一個包含 *所有* 相關訂單的陣列 (父 + 子)
-        $all_orders = array_merge( array( $parent_order ), $child_orders );
-
-        if ( empty( $all_orders ) ) {
-            return;
-        }
-
-        // 4. 顯示介紹標題
-        echo '<h2>' . esc_html__( '您的訂單詳情', 'cart-manager' ) . '</h2>';
-        echo '<p>' . esc_html__( '由於您訂購了來自不同供應商的商品，您的訂單已被拆分為以下幾張 (包含原始訂單)：', 'cart-manager' ) . '</p>';
-
-        // 5. 建立表格 (使用 WooCommerce 的 CSS class 來匹配樣式)
-        ?>
-        <table class="woocommerce-orders-table woocommerce-MyAccount-orders shop_table shop_table_responsive my_account_orders">
-            <thead>
-                <tr>
-                    <th class="woocommerce-orders-table__header woocommerce-orders-table__header-order-number"><span class="nobr"><?php esc_html_e( '訂單', 'woocommerce' ); ?></span></th>
-                    <th class="woocommerce-orders-table__header woocommerce-orders-table__header-order-date"><span class="nobr"><?php esc_html_e( '日期', 'woocommerce' ); ?></span></th>
-                    <th class="woocommerce-orders-table__header woocommerce-orders-table__header-order-status"><span class="nobr"><?php esc_html_e( '狀態', 'woocommerce' ); ?></span></th>
-                    <th class="woocommerce-orders-table__header woocommerce-orders-table__header-order-total"><span class="nobr"><?php esc_html_e( '總計', 'woocommerce' ); ?></span></th>
-                    <th class="woocommerce-orders-table__header woocommerce-orders-table__header-order-actions"><span class="nobr"><?php esc_html_e( '動作', 'woocommerce' ); ?></span></th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php
-                // 迴圈 $all_orders 陣列
-                foreach ( $all_orders as $order ) {
-                    ?>
-                    <tr class="woocommerce-orders-table__row order">
-                        <td class="woocommerce-orders-table__cell woocommerce-orders-table__cell-order-number" data-title="<?php esc_attr_e( '訂單', 'woocommerce' ); ?>">
-                            <a href="<?php echo esc_url( $order->get_view_order_url() ); ?>">
-                                #<?php echo esc_html( $order->get_order_number() ); ?>
-                            </a>
-                        </td>
-                        <td class="woocommerce-orders-table__cell woocommerce-orders-table__cell-order-date" data-title="<?php esc_attr_e( '日期', 'woocommerce' ); ?>">
-                            <time datetime="<?php echo esc_attr( $order->get_date_created()->date( 'c' ) ); ?>"><?php echo esc_html( wc_format_datetime( $order->get_date_created() ) ); ?></time>
-                        </td>
-                        <td class="woocommerce-orders-table__cell woocommerce-orders-table__cell-order-status" data-title="<?php esc_attr_e( '狀態', 'woocommerce' ); ?>">
-                            <?php echo esc_html( wc_get_order_status_name( $order->get_status() ) ); ?>
-                        </td>
-                        <td class="woocommerce-orders-table__cell woocommerce-orders-table__cell-order-total" data-title="<?php esc_attr_e( '總計', 'woocommerce' ); ?>">
-                            <?php
-                            // 顯示金額和商品數量
-                            echo wp_kses_post( $order->get_formatted_order_total() );
-                            ?>
-                        </td>
-                        <td class="woocommerce-orders-table__cell woocommerce-orders-table__cell-order-actions" data-title="<?php esc_attr_e( '動作', 'woocommerce' ); ?>">
-                            <a href="<?php echo esc_url( $order->get_view_order_url() ); ?>" class="woocommerce-button button view"><?php esc_html_e( '查看', 'woocommerce' ); ?></a>
-                        </td>
-                    </tr>
-                    <?php
-                }
-                ?>
-            </tbody>
-        </table>
-        <?php
-    }
-
-    /**
      * (全新) 7. 在結帳頁面顯示訂單拆分提醒
      *
      * 在 'filter_cart_for_checkout' (priority 10) 之後執行。
@@ -442,7 +349,7 @@ class CM_Checkout_Manager {
             // 3. 如果大於 1，手動 echo 提示框的 HTML
             $message = sprintf(
                 // translators: %d = number of orders
-                esc_html__( '請注意：由於您選擇了 %d 個不同供應商的商品，您的訂單將會被拆分為 %d 筆獨立訂單。', 'cart-manager' ),
+                esc_html__( '請注意：由於您選擇了 %d 個不同供應商的商品，您的訂單將會被拆分為 %d 筆獨立訂單，並且將收取 %d 筆運費。', 'cart-manager' ),
                 $supplier_count,
                 $supplier_count
             );
@@ -451,5 +358,83 @@ class CM_Checkout_Manager {
             // 不使用 wc_add_notice()，而是直接印出 HTML
             echo '<div class="woocommerce-info" role="alert">' . $message . '</div>';
         }
+    }
+
+    /**
+     * (*** 已重構 ***) 感謝頁面：使用單一函數處理所有顯示邏輯
+     *
+     * 此函數以高優先級 (5) 執行。
+     * - 如果是父訂單，則移除預設顯示，改為顯示自訂表格。
+     * - 如果是正常訂單，則不執行任何動作，讓預設 (10) 顯示。
+     *
+     * @param int $order_id 傳入的訂單 ID
+     */
+    public function display_thankyou_page_details( $order_id ) {
+        
+        $order = wc_get_order( $order_id );
+
+        // --- 檢查是否為我們拆分過的父訂單 ---
+        if ( $order && $order->get_meta('_cm_order_split_parent') && $order->get_parent_id() === 0 ) {
+            
+            // --- 情況 A：這是父訂單，我們接管顯示 ---
+
+            // 1. 移除 WooCommerce 預設的訂單詳情表格 (它在 priority 10)
+            remove_action( 'woocommerce_thankyou', 'woocommerce_order_details_table', 10 );
+
+            // 2. 獲取所有子訂單
+            $child_orders = wc_get_orders( array(
+                'parent'  => $order_id,
+                'limit'   => -1,
+                'orderby' => 'ID',
+                'order'   => 'ASC'
+            ) );
+            $all_orders = array_merge( array( $order ), $child_orders );
+
+            // 3. 顯示我們的自訂表格 (這部分的 HTML 與您之前的功能相同)
+            echo '<h2>' . esc_html__( '您的訂單詳情', 'cart-manager' ) . '</h2>';
+            echo '<p>' . esc_html__( '由於您訂購了來自不同供應商的商品，您的訂單已被拆分為以下幾張 (包含原始訂單)：', 'cart-manager' ) . '</p>';
+            ?>
+            <table class="woocommerce-orders-table woocommerce-MyAccount-orders shop_table shop_table_responsive my_account_orders">
+                <thead>
+                    <tr>
+                        <th class="woocommerce-orders-table__header woocommerce-orders-table__header-order-number"><span class="nobr"><?php esc_html_e( '訂單', 'woocommerce' ); ?></span></th>
+                        <th class="woocommerce-orders-table__header woocommerce-orders-table__header-order-date"><span class="nobr"><?php esc_html_e( '日期', 'woocommerce' ); ?></span></th>
+                        <th class="woocommerce-orders-table__header woocommerce-orders-table__header-order-status"><span class="nobr"><?php esc_html_e( '狀態', 'woocommerce' ); ?></span></th>
+                        <th class="woocommerce-orders-table__header woocommerce-orders-table__header-order-total"><span class="nobr"><?php esc_html_e( '總計', 'woocommerce' ); ?></span></th>
+                        <th class="woocommerce-orders-table__header woocommerce-orders-table__header-order-actions"><span class="nobr"><?php esc_html_e( '動作', 'woocommerce' ); ?></span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php
+                    foreach ( $all_orders as $loop_order ) {
+                        ?>
+                        <tr class="woocommerce-orders-table__row order">
+                            <td class="woocommerce-orders-table__cell woocommerce-orders-table__cell-order-number" data-title="<?php esc_attr_e( '訂單', 'woocommerce' ); ?>">
+                                <a href="<?php echo esc_url( $loop_order->get_view_order_url() ); ?>">
+                                    #<?php echo esc_html( $loop_order->get_order_number() ); ?>
+                                </a>
+                            </td>
+                            <td class="woocommerce-orders-table__cell woocommerce-orders-table__cell-order-date" data-title="<?php esc_attr_e( '日期', 'woocommerce' ); ?>">
+                                <time datetime="<?php echo esc_attr( $loop_order->get_date_created()->date( 'c' ) ); ?>"><?php echo esc_html( wc_format_datetime( $loop_order->get_date_created() ) ); ?></time>
+                            </td>
+                            <td class="woocommerce-orders-table__cell woocommerce-orders-table__cell-order-status" data-title="<?php esc_attr_e( '狀態', 'woocommerce' ); ?>">
+                                <?php echo esc_html( wc_get_order_status_name( $loop_order->get_status() ) ); ?>
+                            </td>
+                            <td class="woocommerce-orders-table__cell woocommerce-orders-table__cell-order-total" data-title="<?php esc_attr_e( '總計', 'woocommerce' ); ?>">
+                                <?php echo wp_kses_post( $loop_order->get_formatted_order_total() ); ?>
+                            </td>
+                            <td class="woocommerce-orders-table__cell woocommerce-orders-table__cell-order-actions" data-title="<?php esc_attr_e( '動作', 'woocommerce' ); ?>">
+                                <a href="<?php echo esc_url( $loop_order->get_view_order_url() ); ?>" class="woocommerce-button button view"><?php esc_html_e( '查看', 'woocommerce' ); ?></a>
+                            </td>
+                        </tr>
+                        <?php
+                    }
+                    ?>
+                </tbody>
+            </table>
+            <?php
+        }
+        // --- 情況 B：這是一般訂單，我們什麼都不做 ---
+        // 這樣 WooCommerce 預設的 hook (priority 10) 就會正常執行，且只會執行一次。
     }
 }
