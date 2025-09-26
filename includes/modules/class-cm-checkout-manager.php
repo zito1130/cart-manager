@@ -351,6 +351,7 @@ class CM_Checkout_Manager {
                 // translators: %d = number of orders
                 esc_html__( '請注意：由於您選擇了 %d 個不同供應商的商品，您的訂單將會被拆分為 %d 筆獨立訂單，並且將收取 %d 筆運費。', 'cart-manager' ),
                 $supplier_count,
+                $supplier_count,
                 $supplier_count
             );
             
