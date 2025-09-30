@@ -89,18 +89,12 @@ class CM_Checkout_Manager {
     }
 
     /**
-     * 3. 依供應商拆分訂單 (*** 已更新為：複製運費 ***)
-     * * 父訂單保留原始運費
-     * * 所有子訂單 *複製* 原始運費
+     * 3. 依供應商拆分訂單 (*** 已更新為「高兼容性」運費分配 ***)
      */
     public function split_order_by_supplier( $order_id ) {
         
-        // --- 檢查階段 (不變) ---
         $parent_order = wc_get_order( $order_id );
-        if ( ! $parent_order ) {
-            return;
-        }
-        if ( $parent_order->get_meta( '_cm_order_split_parent' ) || $parent_order->get_parent_id() > 0 ) {
+        if ( ! $parent_order || $parent_order->get_meta( '_cm_order_split_parent' ) || $parent_order->get_parent_id() > 0 ) {
             return;
         }
         $items = $parent_order->get_items();
@@ -117,130 +111,102 @@ class CM_Checkout_Manager {
             }
             $supplier_groups[ $supplier_id ][ $item_id ] = $item;
         }
+        
+        $supplier_count = count($supplier_groups);
 
         // --- 步驟 2：檢查是否需要分單 (不變) ---
-        if ( count( $supplier_groups ) <= 1 ) {
+        if ( $supplier_count <= 1 ) {
             $this->trigger_all_meta_functions( $order_id );
             $parent_order->save();
             return;
         }
 
-        // --- 步驟 3：需要分單 (不變) ---
+        // --- 步驟 3：需要分單 (*** 運費邏輯已修改 ***) ---
         $parent_order->update_meta_data( '_cm_order_split_parent', true );
         $parent_order->add_order_note( '這是一筆父訂單，已開始進行分單。' );
-        $parent_order->save(); // 立即儲存 (防止競爭條件)
+        
+        // (*** 關鍵修正 ***)
+        // 1. 獲取父訂單的 *單一* 運送方式 (現在只會有一個)
+        $original_shipping_item = reset($parent_order->get_items('shipping'));
+        if ( !$original_shipping_item ) {
+            // 如果沒有運費，無法繼續
+            $parent_order->add_order_note('錯誤：找不到原始運費項目，無法分配運費。');
+            $parent_order->save();
+            return;
+        }
+        
+        // 2. 計算出「單筆」基本運費
+        $total_shipping_cost = $original_shipping_item->get_total();
+        $base_shipping_cost = $total_shipping_cost / $supplier_count;
+        
+        // 3. (可選) 處理稅金
+        $total_shipping_tax = $original_shipping_item->get_taxes();
+        $base_shipping_tax = [];
+        if ( !empty($total_shipping_tax['total']) ) {
+            foreach ($total_shipping_tax['total'] as $tax_id => $tax_amount) {
+                $base_shipping_tax['total'][$tax_id] = $tax_amount / $supplier_count;
+            }
+        }
+        // (*** 修正完畢 ***)
+        
+        $parent_order->save();
 
-        $first_group_items = array_shift( $supplier_groups ); 
+        array_shift( $supplier_groups ); 
         $child_order_ids = array();
 
         // --- 步驟 4：迴圈建立子訂單 (*** 運費邏輯已修改 ***) ---
         foreach ( $supplier_groups as $supplier_id => $child_items ) {
-            
             try {
-                // A. 建立子訂單 (不變)
-                $child_order = wc_create_order( array(
-                    'customer_id'   => $parent_order->get_customer_id(),
-                    'parent'        => $order_id, 
-                    'status'        => $parent_order->get_status(),
-                    'currency'      => $parent_order->get_currency(),
-                    'customer_note' => $parent_order->get_customer_note()
-                ) );
-
-                if ( is_wp_error( $child_order ) ) {
-                    $error_string = $child_order->get_error_message();
-                    $parent_order->add_order_note( 'Debug: 建立子訂單失敗。錯誤：' . $error_string );
-                    $parent_order->save();
-                    continue;
-                }
+                $child_order = wc_create_order( array( 'customer_id' => $parent_order->get_customer_id(), 'parent' => $order_id, 'status' => $parent_order->get_status(), 'currency' => $parent_order->get_currency(), 'customer_note' => $parent_order->get_customer_note() ) );
+                if ( is_wp_error( $child_order ) ) { continue; }
                 
                 $child_order_id = $child_order->get_id();
-
-                // B. 複製基礎資訊 (不變)
                 $billing_address = $parent_order->get_address( 'billing' );
-                if ( is_array( $billing_address ) && ! empty( $billing_address ) ) {
-                    $child_order->set_address( $billing_address, 'billing' );
-                }
+                if ( is_array( $billing_address ) ) { $child_order->set_address( $billing_address, 'billing' ); }
                 $shipping_address = $parent_order->get_address( 'shipping' );
-                if ( is_array( $shipping_address ) && ! empty( $shipping_address ) ) {
-                    $child_order->set_address( $shipping_address, 'shipping' );
-                }
+                if ( is_array( $shipping_address ) ) { $child_order->set_address( $shipping_address, 'shipping' ); }
                 $child_order->set_payment_method( $parent_order->get_payment_method() );
-                $child_order->set_payment_method_title( $parent_order->get_payment_method_title() );
-                $child_order->set_transaction_id( $parent_order->get_transaction_id() );
 
-                $cvs_meta_keys = [
-                    '_shipping_cvs_store_ID',
-                    '_shipping_cvs_store_name',
-                    '_shipping_cvs_store_address',
-                    '_shipping_cvs_store_telephone'
-                ];
+                // (*** 關鍵修正 ***) 建立一個新的運費項目，並設定為「基本運費」
+                $new_shipping_item = new WC_Order_Item_Shipping();
+                $new_shipping_item->set_method_title( str_replace( sprintf(' (%d 個包裹)', $supplier_count), '', $original_shipping_item->get_method_title() ) ); // 移除括號
+                $new_shipping_item->set_method_id( $original_shipping_item->get_method_id() );
+                $new_shipping_item->set_total( $base_shipping_cost );
+                $new_shipping_item->set_taxes( $base_shipping_tax );
+                $child_order->add_item( $new_shipping_item );
+
+                $cvs_meta_keys = ['_shipping_cvs_store_ID','_shipping_cvs_store_name','_shipping_cvs_store_address','_shipping_cvs_store_telephone'];
                 foreach ($cvs_meta_keys as $meta_key) {
-                    // 使用 $parent_order 來獲取 meta
                     $meta_value = $parent_order->get_meta($meta_key, true);
-                    if ($meta_value) {
-                        $child_order->update_meta_data($meta_key, $meta_value);
-                    }
+                    if ($meta_value) { $child_order->update_meta_data($meta_key, $meta_value); }
                 }
-                // B.2 (*** 關鍵修正 ***) 
-                // 複製父訂單的「運送方式」，並「複製」原始運費
-                foreach ( $parent_order->get_items( 'shipping' ) as $shipping_item_id => $shipping_item ) {
-                    $new_shipping_item = new WC_Order_Item_Shipping();
-                    $new_shipping_item->set_method_title( $shipping_item->get_method_title() );
-                    $new_shipping_item->set_method_id( $shipping_item->get_method_id() );
-                    
-                    // --- (*** 這就是您要的修改 ***) ---
-                    // 不再設為 0，而是複製父訂單的運費金額
-                    $new_shipping_item->set_total( $shipping_item->get_total() );
-                    // (建議) 同時複製稅金，以防萬一
-                    $new_shipping_item->set_taxes( $shipping_item->get_taxes() );
-                    // --- (*** 修改完畢 ***) ---
-                    
-                    $child_order->add_item( $new_shipping_item );
-                }
-
-                // C. 複製商品 (不變，已包含 'get_variation_attributes' 修正)
                 foreach ( $child_items as $item_id => $item ) {
                     $product = $item->get_product();
-                    $quantity = $item->get_quantity();
-                    
-                    $variation_data = array();
-                    if ( $product && $product->is_type('variation') ) {
-                        $variation_data = $product->get_variation_attributes();
-                    }
-
-                    $child_order->add_product( $product, $quantity, array(
-                        'variation' => $variation_data, 
-                        'subtotal'  => $item->get_subtotal(),
-                        'total'     => $item->get_total(),
-                    ) );
-                    
-                    // 從父訂單移除此商品
+                    $variation_data = ($product && $product->is_type('variation')) ? $product->get_variation_attributes() : [];
+                    $child_order->add_product( $product, $item->get_quantity(), ['variation' => $variation_data, 'subtotal' => $item->get_subtotal(), 'total' => $item->get_total()] );
                     $parent_order->remove_item( $item_id );
                 }
 
-                // D. 重新計算子訂單的總價 (現在會包含複製過來的運費)
                 $child_order->calculate_totals(); 
                 $child_order->save();
-                
-                // E. 手動觸發 Meta 函數
                 $this->trigger_all_meta_functions( $child_order_id );
-                
                 $child_order->add_order_note( '此訂單是從父訂單 #' . $order_id . ' 拆分而來。' );
-                
                 $child_order_ids[] = $child_order_id;
 
-            } catch ( Throwable $e ) { // (不變) 捕捉所有錯誤
-                $parent_order->add_order_note( '分單失敗：' . $e->getMessage() . ' (檔案: ' . $e->getFile() . ' 行號: ' . $e->getLine() . ')' );
+            } catch ( Throwable $e ) {
+                $parent_order->add_order_note( '分單失敗：' . $e->getMessage() );
             }
-        } // end foreach child group
+        } 
 
-        // --- 步驟 5：更新父訂單 (不變) ---
-        // (*** 關鍵 ***) 傳入 'false' 參數，
-        // 告訴 WC *不要* 重新計算運費 (保留原始運費)
-        $parent_order->calculate_totals( false ); 
+        // --- 步驟 5：更新父訂單 ---
+        // (*** 關鍵修正 ***) 手動將父訂單的運費也設定為「基本運費」
+        $original_shipping_item->set_total( $base_shipping_cost );
+        $original_shipping_item->set_taxes( $base_shipping_tax );
+        $original_shipping_item->set_method_title( str_replace( sprintf(' (%d 個包裹)', $supplier_count), '', $original_shipping_item->get_method_title() ) );
+        $original_shipping_item->save();
+
+        $parent_order->calculate_totals(); 
         $parent_order->save();
-        
-        // 再次觸發父訂單的 Meta
         $this->trigger_all_meta_functions( $order_id ); 
         $parent_order->add_order_note( '父訂單已完成分單。建立的子訂單：' . implode( ', ', $child_order_ids ) );
     }
