@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Cart Manager
  * Description: 提供先進的 WooCommerce 購物車驗證規則與管理功能。
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: zito
  */
 

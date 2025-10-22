@@ -1,9 +1,8 @@
 === Cart Manager ===
 Contributors: zito
 Tags: woocommerce, cart, split order, multi-supplier, supplier, preorder, shipping class, temperature, 購物車, 拆單, 供應商, 預購, 溫層
-Stable tag: 1.0.0
+Stable tag: 1.1.0
 License: GPLv2 or later
-License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 提供先進的 WooCommerce 購物車驗證規則與管理功能。
 
@@ -58,6 +57,9 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 7.  感謝頁面：展示訂單被拆分後的父/子訂單摘要表格。
 
 == 更新日誌 (Changelog) ==
+
+= 1.1.0 =
+* 優化：新增贈品不分單功能。
 
 = 1.0.0 =
 * 插件初始版本。
