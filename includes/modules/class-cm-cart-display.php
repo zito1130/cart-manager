@@ -470,11 +470,31 @@ class CM_Cart_Display {
      * 在第三方插件計算完費率後，將其乘以供應商數量。
      */
     public function multiply_shipping_cost_by_supplier( $rates, $package ) {
+
+        $gift_supplier_nickname = '贈品';
+        $gift_supplier_id = null;
+
+        if ( ! empty( $gift_supplier_nickname ) ) {
+            $users = get_users( array(
+                'meta_key' => 'nickname',
+                'meta_value' => $gift_supplier_nickname,
+                'number' => 1,
+                'fields' => 'ID',
+            ) );
+            if ( ! empty( $users ) ) {
+                $gift_supplier_id = $users[0];
+            }
+        }
         
         // 1. 獲取購物車中的供應商數量
         $supplier_ids = array();
         foreach ( $package['contents'] as $cart_item ) {
             $supplier_id = self::get_item_supplier_id( $cart_item );
+
+            if ( $gift_supplier_id && $supplier_id == $gift_supplier_id ) {
+                continue;
+            }
+
             if ( ! in_array( $supplier_id, $supplier_ids ) ) {
                 $supplier_ids[] = $supplier_id;
             }

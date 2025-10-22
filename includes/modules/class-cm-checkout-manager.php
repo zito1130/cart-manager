@@ -102,6 +102,21 @@ class CM_Checkout_Manager {
             return;
         }
 
+        $gift_supplier_nickname = '贈品';
+        $gift_supplier_id = null;
+
+        if ( ! empty( $gift_supplier_nickname ) ) {
+            $users = get_users( array(
+                'meta_key' => 'nickname',
+                'meta_value' => $gift_supplier_nickname,
+                'number' => 1,
+                'fields' => 'ID',
+            ) );
+            if ( ! empty( $users ) ) {
+                $gift_supplier_id = $users[0];
+            }
+        }
+
         // --- 步驟 1：分組 (商品) (不變) ---
         $supplier_groups = array();
         foreach ( $items as $item_id => $item ) {
@@ -111,7 +126,21 @@ class CM_Checkout_Manager {
             }
             $supplier_groups[ $supplier_id ][ $item_id ] = $item;
         }
-        
+
+        if ( $gift_supplier_id && isset( $supplier_groups[ $gift_supplier_id ] ) && count( $supplier_groups ) > 1) {
+            $gift_items = $supplier_groups[ $gift_supplier_id ];
+            unset( $supplier_groups[ $gift_supplier_id ] );
+
+            reset( $supplier_groups );
+            $first_supplier_id = key( $supplier_groups );
+
+            if ( $first_supplier_id !== null ) {
+                $supplier_groups[ $first_supplier_id ] = array_merge( $supplier_groups[ $first_supplier_id ], $gift_items );
+            } else {
+                $supplier_groups[ $gift_supplier_id ] = $gift_items;
+            }
+        }
+
         $supplier_count = count($supplier_groups);
 
         // --- 步驟 2：檢查是否需要分單 (不變) ---
@@ -296,11 +325,30 @@ class CM_Checkout_Manager {
             return;
         }
 
+        $gift_supplier_nickname = '贈品';
+        $gift_supplier_id = null;
+
+        if ( ! empty( $gift_supplier_nickname ) ) {
+            $users = get_users( array(
+                'meta_key' => 'nickname',
+                'meta_value' => $gift_supplier_nickname,
+                'number' => 1,
+                'fields' => 'ID',
+            ) );
+            if ( ! empty( $users ) ) {
+                $gift_supplier_id = $users[0];
+            }
+        }
+
         // 1. 將購物車中的商品依供應商分組
         $supplier_groups = array();
         foreach ( $cart_items as $cart_item_key => $cart_item ) {
             // 呼叫 CM_Cart_Display 中的靜態輔助函數
             $supplier_id = CM_Cart_Display::get_item_supplier_id( $cart_item );
+
+            if ( $gift_supplier_id && $supplier_id == $gift_supplier_id ) {
+                continue;
+            }
             
             // 我們只需要計算數量
             if ( ! array_key_exists( $supplier_id, $supplier_groups ) ) {
